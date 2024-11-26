@@ -256,10 +256,7 @@ waitnak:    glo   r7                    ; input a character
             lbr   waitnak               ; else get another chatacter
 
 
-
-
-
-
+          ; Advance to the next packet by adjusting the block and pointers.
 
 nextpkt:    ghi   r8                    ; increment block count
             inc   r8
@@ -274,6 +271,9 @@ nextpkt:    ghi   r8                    ; increment block count
             glo   rc
             smi   127
             plo   rc
+
+
+          ; If the buffer is empty, read more data from the input file.
 
             lbnz  sendpkt
             ghi   rc
@@ -290,9 +290,6 @@ startup:    ldi   doread.1              ; pointer to read data subroutine
             lbnz  sendpkt
             ghi   rc
             lbz   endfile
-
-
-
 
 
           ; Send packet pointed to be RA which will be the next packet if
@@ -316,8 +313,6 @@ sendpkt:    ldi   SOH                   ; send start of header byte
             ghi   ra
             phi   rf
 
-
-
             ldi   0                     ; clear checksum accumulator
             stxd
 
@@ -340,26 +335,25 @@ senddat:    irx                         ; add data to checksum
             sep   r5
 
 
+          ; Get an acknowledgement, positive or negative (or cancel).
 
-
-waitack:    glo   r7
+waitack:    glo   r7                    ; get input character
             plo   r5
             sep   r5
 
-            xri   ACK
+            xri   ACK                   ; if it is ack then advance block
             lbz   nextpkt
 
-            xri   NAK^ACK
+            xri   NAK^ACK               ; If it is nak then resend packet
             lbz   sendpkt
 
-            xri   ETX^NAK               ; if it is nak then resend etx
+            xri   ETX^NAK               ; if it is etx (control-c) cancel
             lbz   abandon
 
             lbr   waitack               ; wait for acknowledgement
 
 
-
-
+          ; If transfer is cancelled, clean up and exit.
 
 abandon:    ldi   cleanup.1             ; point to subroutine to restore
             phi   r7
