@@ -26,15 +26,15 @@
             dw    end-start
             dw    start
 
-start:      br    initial
+start:      br    skipspc
 
 
           ; Build information
 
             db    11+80h                ; month
-            db    25                    ; day
+            db    27                    ; day
             dw    2024                  ; year
-            dw    0                     ; build
+            dw    1                     ; build
 
             db    'See github.com/dmadole/MiniDOS-xs for more info',0
 
@@ -57,10 +57,6 @@ start:      br    initial
 #define BRSP b2     ; branch on space input
 #define SESP req    ; set space output
 #define SEMK seq    ; set mark output
-
-
-         
-initial:
 
 
           ; Proces the command-line argument, first skip any leading spaces,
@@ -155,12 +151,14 @@ proceed:    ghi   re                    ; save terminal control echo flag
             ani   %11111100
             lbz   setuart
 
+
           ; Since RE.1 is between 2 and 254 then it means its a bit delay
           ; time and we are using the soft UART. Now decide which one.
 
             sep   scall                 ; say which we have chosen
             dw    o_inmsg
             db    'Send XMODEM using EF/Q port... ',0
+
 
           ; If BIOS is MBIOS based on first version byte being 2, then we
           ; should use Nitro timing, otherwise use Riley timing.
@@ -178,6 +176,9 @@ proceed:    ghi   re                    ; save terminal control echo flag
             plo   r7
             ldi   putsefq.0
             phi   r7
+            ldi   getsefq.1
+            phi   r9
+
 
             lbr   prepare               ; and start xmodem transfer
 
@@ -185,6 +186,8 @@ ismbios:    ldi   getnitr.0             ; mbios to set fast nitro uart
             plo   r7
             ldi   putnitr.0
             phi   r7
+            ldi   getnitr.1
+            phi   r9
 
             lbr   prepare               ; and start xmodem transfer
 
@@ -200,6 +203,8 @@ setuart:    sep   scall                 ; say which we have chosen
             plo   r7
             ldi   putuart.0
             phi   r7
+            ldi   getuart.1
+            phi   r9
 
 
           ; Now that the UART is selected switch up the program counter
@@ -226,7 +231,10 @@ prepare:    glo   r6                    ; save r6 for main program counter
           ; We are running with R6 as the program counter now. Initialize
           ; the one-time things we need for the transfer.
 
-startit:    ldi   0                     ; clear flag bits
+startit:    ghi   r9                    ; set high byte of subroutine
+            phi   r5
+
+            ldi   0                     ; clear flag bits
             phi   r8
 
             ldi   1                     ; first expected packet is one
@@ -239,9 +247,6 @@ startit:    ldi   0                     ; clear flag bits
 
 
           ; Wait for receiver to send an initial NAK to start the transfer.
-
-            ldi   getuart.1             ; set msb to the subroutine page
-            phi   r5
 
 waitnak:    glo   r7                    ; input a character
             plo   r5
@@ -275,7 +280,7 @@ nextpkt:    ghi   r8                    ; increment block count
 
           ; If the buffer is empty, read more data from the input file.
 
-            lbnz  sendpkt
+            lbnz  sendpkt               ; don't read if still data in buffer
             ghi   rc
             lbnz  sendpkt
 
@@ -306,6 +311,7 @@ sendpkt:    ldi   SOH                   ; send start of header byte
             sdi   255
             sep   r5
 
+
           ; Send the data bytes, checksumming them as we send them.
 
             glo   ra                    ; get pointer to buffer
@@ -327,6 +333,7 @@ senddat:    irx                         ; add data to checksum
             glo   rf                    ; continue until packet boundary
             ani   %01111111
             lbnz  senddat
+
 
           ; Finally send the checksum byte, then wait for an ACK or NAK.
 
@@ -362,13 +369,14 @@ abandon:    ldi   cleanup.1             ; point to subroutine to restore
 
             sep   r7                    ; recover r5,r6 and set pc to r3
 
-            sep   scall
+            sep   scall                 ; output cancellation message
             dw    o_inmsg
             db    'cancelled.',13,10,0
 
-            sep   scall
+            sep   scall                 ; close output file
             dw    o_close
 
+            ldi   1                     ; return failure
             sep   sret
 
 
@@ -394,21 +402,21 @@ waitend:    glo   r7                    ; get byte from the input
 
           ; If end of file acknowledged then clean up and return.
 
-            ldi   cleanup.1
+            ldi   cleanup.1             ; restore pc and scrt environment
             phi   r7
             ldi   cleanup.0
             plo   r7
 
-            sep   r7
+            sep   r7                    ; recover r5,r6 and set pc to r3
 
-            sep   scall
+            sep   scall                 ; output completion message
             dw    o_inmsg
             db    'complete.',13,10,0
 
-            sep   scall
+            sep   scall                 ; close output file
             dw    o_close
 
-            ldi   0
+            ldi   0                     ; return success
             sep   sret
 
 
@@ -465,14 +473,19 @@ doread:     irx                         ; restore the srt return routine
             sep   scall                 ; write the sector into the file
             dw    o_read
 
-            lbr   padtest
 
-padloop:    ldi   26
+          ; If the read was short of a 128-byte boundary, then pad the data
+          ; with control-Z bytes to the next boundary so that the last XMODEM
+          ; block will be padded as required.
+
+            lbr   padtest               ; jump into test to start loop
+
+padloop:    ldi   26                    ; append control-z, increment count
             str   rf
             inc   rf
             inc   rc
-            
-padtest:    glo   rf
+
+padtest:    glo   rf                    ; add padding if not at boundary
             ani   %01111111
             lbnz  padloop
 
@@ -481,24 +494,13 @@ padtest:    glo   rf
             ghi   r5
             stxd
 
-            ldi   getuart.1               ; setup pointer to console routines
+            ghi   r9                    ; setup pointer to console routines
             phi   r5
             ghi   r7
             plo   r5
 
             sep   r6                    ; return to main program
 
-
-fildes:     dw    0,0
-            dw    dta
-            dw    0
-            db    0
-            dw    0,0
-            dw    0
-            dw    0,0
-
-
-            org   (($-1)|255)+1
 
           ; ------------------------------------------------------------------
           ; This implements a receive byte with timeout function for the UART
@@ -541,6 +543,13 @@ putuart:    plo   re                    ; save the byte to send
             br    uartret               ; return through getuart
 
 
+          ; Check that transmit and send entry points are in the same page.
+
+          #if getuart.1 != putuart.1
+            #error getuart and putuart in different pages
+          #endif
+
+
           ; ------------------------------------------------------------------
           ; This is a complex update of the Nitro UART from MBIOS; it has been
           ; modified to move the cycles for the bit rate factor decompression
@@ -551,12 +560,14 @@ putuart:    plo   re                    ; save the byte to send
 
 getnitr:    BRMK  getnitr               ; continue until something happens
 
+
           ; The same shift register that is used to receive bits into is also
           ; used to count loops by preloading it with all ones except the last
           ; bit, which will shift out as zero when all the register is full.
 
 nitinit:    ldi   %01111111              ; set stop bit into byte buffer
             plo   re
+
 
           ; If the time factor is greater than 64 then we add twice the amount
           ; in excess of 64 back to it, so that each step above 64 amounts to
@@ -571,6 +582,7 @@ nitinit:    ldi   %01111111              ; set stop bit into byte buffer
             smi   63                    ; if value is less than 63 leave as-is
             bdf   nitcomp
 
+
           ; If we are in the 0 to 63 part of the range, simply add half back
           ; to the value to get the 1.5 bit times from start bit to the middle
           ; of the first data bit, then do to the normal delay.
@@ -580,6 +592,7 @@ nitinit:    ldi   %01111111              ; set stop bit into byte buffer
             add
 
             br    nittime               ; enter regular bit delay routine
+
 
           ; If greater than 64, then 1.5 bit times is more than 8 bits so we
           ; can't simply use the normal delay loop which has an 8-bit counter.
@@ -602,6 +615,7 @@ nithalf:    smi   4                     ; delay in increments of 4 cycles
             skp
             lskp
 nitfrac:    ldi   0
+
 
           ; Delay for a full bit time using decompressed value from stack.
 
@@ -661,6 +675,7 @@ nitstop:    ldn   r2                    ; wait for minimum stop bit time
 nitwait:    smi   4
             bdf   nitwait
 
+
           ; Once the stop bit is timed, send the start bit and delay, and end
           ; the delay with DF set as we then jump into the send loop and this
           ; level will get shifted into the shift register just before we exit
@@ -676,6 +691,7 @@ nitstrt:    smi   4                     ; delay 4 cycles for each 4 counts
 
             adi   nitsetf+1             ; jump into table for fine delay
             plo   r5
+
 
           ; For each bit we time the bulk delay with a loop and then jump into
           ; a specially-constructed table to create the fine delay to a single
@@ -708,11 +724,19 @@ nitsetf:    ldi   0
 nitmark:    SEMK                        ; set mark output, do next bit
             bnz   nitmore
 
+
           ; When the shift register is all zeros, we have sent 8 data bits and
           ; set the stop bit level. Return through the SEP in GETBITS so that
           ; the PC is reset to receive a byte each time after sending one.
 
             br    nitretn               ; return through getbits to set pc
+
+
+          ; Check that transmit and send entry points are in the same page.
+
+          #if getnitr.1 != putnitr.1
+            #error getnitr and putnitr in different pages
+          #endif
 
 
           ; -----------------------------------------------------------------
@@ -723,12 +747,14 @@ nitmark:    SEMK                        ; set mark output, do next bit
 
 getsefq:    BRMK  getsefq                ; wait for start bit
 
+
           ; The same shift register that is used to receive bits into is also
           ; used to count loops by preloading it with all ones except the last
           ; bit, which will shift out as zero when all the register is full.
 
 efqinit:    ldi   %01111111              ; set stop bit into byte buffer
             plo   re
+
 
           ; The delay after the start bit needs to be 1.5 times the bit time.
           ; This is implemented with a separate loop that delays 4 cycles per
@@ -738,6 +764,7 @@ efqinit:    ldi   %01111111              ; set stop bit into byte buffer
 efqcomp:    ghi   re                    ; delay four cycles per count
 efqhalf:    smi   2
             bdf   efqhalf
+
 
           ; This is where we loop back for each additional bit afterward
 
@@ -779,6 +806,7 @@ efqwait:    smi   2
             nop
             lbdf  efqwait
 
+
           ; Once the stop bit is timed, send the start bit and delay, and end
           ; the delay with DF set as we then jump into the send loop and this
           ; level will get shifted into the shift register just before we exit
@@ -795,6 +823,7 @@ efqstrt:    smi   2                     ; delay eight cycles per count
 
             shl                         ; d is negative so this sets df
             lbr  efqshft
+
 
           ; This is where subsequent bits loop back after the start.
 
@@ -819,11 +848,31 @@ efqshft:    nop                         ; extra delay for timing
 efqmark:    SEMK                        ; set mark output, do next bit
             lbnz  efqmore
 
+
           ; When the shift register is all zeros, we have sent 8 data bits and
           ; set the stop bit level. Return through the SEP in GETBITS so that
           ; the PC is reset to receive a byte each time after sending one.
 
             lbr   efqretn               ; return through getbits to set pc
+
+
+          ; Check that transmit and send entry points are in the same page.
+
+          #if getsefq.1 != putsefq.1
+            #error getsefq and putsefq in different pages
+          #endif
+
+
+          ; File descriptor for output file. This is positioned here just
+          ; to optimize page boundaries, it doesn't matter where it is.
+
+fildes:     dw    0,0
+            dw    dta
+            dw    0
+            db    0
+            dw    0,0
+            dw    0
+            dw    0,0
 
 
           ; The data buffer needs to be page aligned to simplify the pointer
